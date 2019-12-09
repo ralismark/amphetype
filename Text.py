@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-from __future__ import division, with_statement
+
 
 import re
 import codecs
@@ -14,7 +14,7 @@ abbreviations = {
         'Dak', 'Del', 'Fed', 'Fla', 'Ga', 'Ia', 'Id', 'Ida', 'Ill', 'Ind',
         'Is', 'Kan', 'Kans', 'Ken', 'Ky', 'La', 'Man', 'Mass', 'Md', 'Me',
         'Mex', 'Mich', 'Minn', 'Miss', 'Mo', 'Mont', 'Neb', 'Nebr', 'Nev',
-        'Ok', 'Okla', 'Ont', 'Ore', 'Pa', 'Penn', 'Penna', u'Qué', 'Sask',
+        'Ok', 'Okla', 'Ont', 'Ore', 'Pa', 'Penn', 'Penna', 'Qué', 'Sask',
         'Tenn', 'Tex', 'USAFA', 'Ut', 'Va', 'Vt', 'Wash', 'Wis', 'Wisc', 'Wy',
         'Wyo', 'Yuk', 'adm', 'al', 'apr', 'arc', 'assn', 'atty', 'attys',
         'aug', 'ave', 'avg', 'bld', 'blvd', 'bros', 'capt', 'cl', 'cmdr', 'co',
@@ -35,7 +35,7 @@ class SentenceSplitter(object):
         p = [0]
         sen = r"""(?:(?: |^)[^\w. ]*(?P<pre>\w+)[^ .]*\.+|[?!]+)['"]?(?= +(?:[^ a-z]|$))|$"""
         sen_re = re.compile(sen)
-        return ifilter(None, imap(lambda x: self.pars(p, x), self.sen.finditer(self.string)))
+        return filter(None, map(lambda x: self.pars(p, x), self.sen.finditer(self.string)))
 
     def pars(self, p, mat):
         is_abbr = lambda s: s.lower() in abbreviations or s in abbreviations
@@ -81,11 +81,11 @@ class LessonMiner(QObject):
             if item is not None:
                 part.append(item)
             else:
-                ret.append(u' '.join(part))
+                ret.append(' '.join(part))
                 part = []
         if part:
-            ret.append(u' '.join(part))
-        return u'\n'.join(ret)
+            ret.append(' '.join(part))
+        return '\n'.join(ret)
 
     def __iter__(self):
         if self.lessons is None:
@@ -97,13 +97,13 @@ class LessonMiner(QObject):
         ps = []
         for line in file:
             line = line.strip()
-            if line <> '':
+            if line != '':
                 p.append(line)
             elif p:
-                ps.append(SentenceSplitter(u" ".join(p)))
+                ps.append(SentenceSplitter(" ".join(p)))
                 p = []
         if p:
-            ps.append(SentenceSplitter(u" ".join(p)))
+            ps.append(SentenceSplitter(" ".join(p)))
         return ps
 
 def to_lessons(sentences):
@@ -127,11 +127,11 @@ def to_lessons(sentences):
             backlog.append(part)
             backlen += len(part)
             if backlen >= min_chars:
-                yield u' '.join(backlog)
+                yield ' '.join(backlog)
                 backlog = []
                 backlen = 0
     if backlen > 0:
-        yield u' '.join(backlog)
+        yield ' '.join(backlog)
 
 class LessonGeneratorPlain():
     def __init__(self, words, per_lesson=12, repeats=4):
@@ -145,7 +145,7 @@ class LessonGeneratorPlain():
             wcopy[0:per_lesson] = []
             random.shuffle(lesson)
             self.lessons.append( #textwrap.fill(
-                u' '.join(lesson)) #, width))
+                ' '.join(lesson)) #, width))
 
     def __iter__(self):
         return iter(self.lessons)
@@ -153,4 +153,4 @@ class LessonGeneratorPlain():
 if __name__ == '__main__':
     import sys
     for x in LessonMiner(sys.argv[1]):
-        print "--%s--" % x
+        print("--%s--" % x)

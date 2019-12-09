@@ -1,5 +1,5 @@
 
-from __future__ import with_statement, division
+
 
 from itertools import *
 import random
@@ -26,10 +26,10 @@ class StringListWidget(QTextEdit):
         self.connect(self, SIGNAL("textChanged()"), self.textChanged)
 
     def addList(self, lst):
-        self.append(u' '.join(lst))
+        self.append(' '.join(lst))
 
     def getList(self):
-        return unicode(self.toPlainText()).split()
+        return str(self.toPlainText()).split()
 
     def addFromTyped(self):
         words = [x[0] for x in DB.fetchall('select distinct data from statistic where type = 2 order by random()')]
@@ -37,12 +37,12 @@ class StringListWidget(QTextEdit):
 
     def addFromFile(self):
         filen = QFileDialog.getOpenFileName()
-        if filen == u'':
+        if filen == '':
             return
         try:
             with codecs.open(filen, "r", "utf_8_sig") as f:
                 words = f.read().split()
-        except Exception, e:
+        except Exception as e:
             QMessageBox.warning(self, "Couldn't Read File", str(e))
             return
         random.shuffle(words)
@@ -59,14 +59,14 @@ class StringListWidget(QTextEdit):
             if len(control) == 0:
                 return
             if w == 'e': # encompassing
-                stream = map(lambda x: (sum([x.count(c) for c in control]), x), words)
+                stream = [(sum([x.count(c) for c in control]), x) for x in words]
                 #print "str:", list(stream)[0:10]
-                preres = list(islice(ifilter(lambda x: x[0]>0, stream), 4*n))
+                preres = list(islice(filter(lambda x: x[0]>0, stream), 4*n))
                 #print "pre:", preres
                 preres.sort(key=lambda x: x[0], reverse=True)
-                words = map(lambda x: x[1], preres)
+                words = [x[1] for x in preres]
             else: # similar
-                words = ifilter(lambda x:
+                words = filter(lambda x:
                     0 < min([
                             editdist.distance(x.encode('latin1', 'replace'),
                                               y.encode('latin1', 'replace'))/max(len(y), len(x))
@@ -135,7 +135,7 @@ class LessonGenerator(QWidget):
 
     def wantReview(self, words):
         sentences = self.generateLesson(words)
-        self.emit(SIGNAL("newReview"), u' '.join(sentences))
+        self.emit(SIGNAL("newReview"), ' '.join(sentences))
 
     def generatePreview(self):
         words = self.strings.getList()
@@ -156,15 +156,15 @@ class LessonGenerator(QWidget):
 
             if mix == 'm': # mingle
                 random.shuffle(sen)
-            sentences.append(u' '.join(sen))
+            sentences.append(' '.join(sen))
         return sentences
 
     def acceptLessons(self, name=None):
-        name = unicode(self.les_name.text())
+        name = str(self.les_name.text())
         if len(name.strip()) == 0:
             name = "<Lesson %s>" % time.strftime("%y-%m-%d %H:%M")
 
-        lessons = filter(None, [x.strip() for x in unicode(self.sample.toPlainText()).split("\n\n")])
+        lessons = [_f for _f in [x.strip() for x in str(self.sample.toPlainText()).split("\n\n")] if _f]
 
         if len(lessons) == 0:
             QMessageBox.information(self, "No Lessons", "Generate some lessons before you try to add them!")

@@ -110,9 +110,9 @@ if __name__ == '__main__':
     v = Plotter()
     p = Plot([1,2,3,4], [5.1,5.7,5.3,4.0])
     r = p.sceneRect()
-    print r.x(),r.y(),r.width(),r.height()
+    print(r.x(),r.y(),r.width(),r.height())
     v.setScene(p)
     v.show()
     app.exec_()
-    print "exis"
+    print("exis")
 

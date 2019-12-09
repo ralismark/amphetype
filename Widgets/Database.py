@@ -1,12 +1,12 @@
 
 
-from __future__ import with_statement, division
+
 
 from QtUtil import *
 
 from PyQt4.QtCore import *
 from PyQt4.QtGui import *
-from Config import *
+from Config import Settings, SettingsEdit
 from Data import DB
 import time
 import locale
@@ -78,7 +78,7 @@ Results: %d
 Analysis data: %d (%d keys, %d trigrams, %d words)
   %d characters and %d words typed total\n'''+
   ("First result was %.2f days ago.\n" % ((time.time()-n_first)/86400.0)),
-            tuple([n_text, n_res, sum(map(lambda x: x[0], n_words))] + map(lambda x: x[0], n_words) +
+            tuple([n_text, n_res, sum([x[0] for x in n_words])] + [x[0] for x in n_words] +
             [n_words[0][1], n_words[2][1]]), True))
 
     def dbchange(self, nn):
