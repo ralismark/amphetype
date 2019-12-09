@@ -174,4 +174,3 @@ class LessonGenerator(QWidget):
 
     def addStrings(self, *args):
         self.strings.addList(*args)
-

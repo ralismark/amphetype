@@ -167,7 +167,7 @@ A typing program that not only measures your speed and progress, but also gives 
         DB.commit()
 
     def addTexts(self, source, texts, lesson=None, update=True):
-        id = DB.getSource(source, lesson)
+        id = DB.get_source(source, lesson)
         r = []
         for x in texts:
             h = hashlib.sha1()
@@ -259,7 +259,7 @@ A typing program that not only measures your speed and progress, but also gives 
 
     def disableSelected(self):
         cats, texts = self.getSelected()
-        DB.setRegex(Settings.get('text_regex'))
+        DB.set_regex(Settings.get('text_regex'))
         DB.executemany("""update text set disabled = ifelse(disabled,NULL,1)
                 where rowid = ? and regex_match(text) = 1""",
                        map(lambda x:(x, ), texts))

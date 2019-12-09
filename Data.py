@@ -1,46 +1,38 @@
-
-
 from __future__ import division, with_statement
+from Config import Settings
 
-
-
-from itertools import *
-import time
 import bisect
 import sqlite3
 import re
-from Config import Settings
-
 
 def trimmed_average(total, series):
-        s = 0.0
-        n = 0
+    s_val = 0.0
+    n_val = 0
 
-        start = 0
-        cutoff = total // 3
-        while cutoff > 0:
-            cutoff -= series[start][1]
-            start += 1
-        if cutoff < 0:
-            s += -cutoff * series[start-1][0]
-            n += -cutoff
+    start = 0
+    cutoff = total // 3
+    while cutoff > 0:
+        cutoff -= series[start][1]
+        start += 1
+    if cutoff < 0:
+        s_val += -cutoff * series[start-1][0]
+        n_val += -cutoff
 
-        end = len(series)-1
-        cutoff = total // 3
-        while cutoff > 0:
-            cutoff -= series[end][1]
-            end -= 1
-        if cutoff < 0:
-            s += -cutoff * series[end+1][0]
-            n += -cutoff
+    end = len(series)-1
+    cutoff = total // 3
+    while cutoff > 0:
+        cutoff -= series[end][1]
+        end -= 1
+    if cutoff < 0:
+        s_val += -cutoff * series[end+1][0]
+        n_val += -cutoff
 
-        while start <= end:
-            s += series[start][1] * series[start][0]
-            n += series[start][1]
-            start += 1
+    while start <= end:
+        s_val += series[start][1] * series[start][0]
+        n_val += series[start][1]
+        start += 1
 
-        return s/n
-
+    return s_val/n_val
 
 class Statistic(list):
     def __init__(self):
@@ -59,19 +51,15 @@ class Statistic(list):
         return trimmed_average(len(self), map(lambda x:(x, 1), self))
 
     def median(self):
-        l = len(self)
-        if l == 0:
+        length = len(self)
+        if length == 0:
             return None
-        if l & 1:
-            return self[l // 2]
-        return (self[l//2] + self[l//2-1])/2.0
+        if length & 1:
+            return self[length // 2]
+        return (self[length//2] + self[length//2-1])/2.0
 
     def flawed(self):
         return self.flawed_
-
-
-
-
 
 class MedianAggregate(Statistic):
     def step(self, val):
@@ -108,9 +96,10 @@ class AmphDatabase(sqlite3.Connection):
     def __init__(self, *args):
         super(AmphDatabase, self).__init__(*args)
 
-        self.setRegex("")
-        self.resetCounter()
-        self.resetTimeGroup()
+        self.set_regex("")
+        self.reset_counter()
+        self.lasttime_ = 0.0 # to suppress warning
+        self.reset_time_group()
         self.create_function("counter", 0, self.counter)
         self.create_function("regex_match", 1, self.match)
         self.create_function("abbreviate", 2, self.abbreviate)
@@ -123,39 +112,40 @@ class AmphDatabase(sqlite3.Connection):
 
         try:
             self.fetchall("select * from result,source,statistic,text,mistake limit 1")
-        except:
-            self.newDB()
+        except sqlite3.Error:
+            self.initialise()
 
-    def resetTimeGroup(self):
+    def reset_time_group(self):
         self.lasttime_ = 0.0
         self.timecnt_ = 0
 
-    def time_group(self, d, x):
-        if abs(x-self.lasttime_) >= d:
+    def time_group(self, interval, ltime):
+        if abs(ltime - self.lasttime_) >= interval:
             self.timecnt_ += 1
-        self.lasttime_ = x
+        self.lasttime_ = ltime
         return self.timecnt_
 
-    def setRegex(self, x):
-        self.regex_ = re.compile(x)
+    def set_regex(self, pattern):
+        self.regex_ = re.compile(pattern)
 
-    def abbreviate(self, x, n):
-        if len(x) <= n:
-            return x
-        return x[:n-3] + "..."
+    def abbreviate(self, string, maxlen):
+        if len(string) <= maxlen:
+            return string
+        return string[:maxlen-3] + "..."
 
-    def match(self, x):
-        if self.regex_.search(x):
+    def match(self, string):
+        if self.regex_.search(string):
             return 1
         return 0
 
     def counter(self):
         self._count += 1
         return self._count
-    def resetCounter(self):
+
+    def reset_counter(self):
         self._count = -1
 
-    def newDB(self):
+    def initialise(self):
         self.executescript("""
 create table source (name text, disabled integer, discount integer);
 create table text (id text primary key, source integer, text text, disabled integer);
@@ -168,51 +158,32 @@ create view text_source as
         """)
         self.commit()
 
-    def executemany_(self, *args):
-        super(AmphDatabase, self).executemany(*args)
-    def executemany(self, *args):
-        super(AmphDatabase, self).executemany(*args)
-        #self.commit()
-
     def fetchall(self, *args):
         return self.execute(*args).fetchall()
 
     def fetchone(self, sql, default, *args):
-        x = self.execute(sql, *args)
-        g = x.fetchone()
-        if g is None:
+        row = self.execute(sql, *args).fetchone()
+        if row is None:
             return default
-        return g
+        return row
 
-    def getSource(self, source, lesson=None):
-        v = self.fetchall('select rowid from source where name = ? limit 1', (source, ))
-        if len(v) > 0:
-            self.execute('update source set disabled = NULL where rowid = ?', v[0])
+    def get_source(self, source, lesson=None):
+        srcids = self.fetchall('select rowid from source where name = ? limit 1', (source, ))
+        if srcids:
+            self.execute('update source set disabled = NULL where rowid = ?', srcids[0])
             self.commit()
-            return v[0][0]
+            return srcids[0][0]
         self.execute('insert into source (name,discount) values (?,?)', (source, lesson))
-        return self.getSource(source)
-
-
-
-dbname = Settings.get("db_name")
+        return self.get_source(source)
 
 # GLOBAL
-DB = sqlite3.connect(dbname,5,0,"DEFERRED",False,AmphDatabase)
+DB = sqlite3.connect(Settings.get("db_name"), 5, 0, "DEFERRED", False, AmphDatabase)
 
-def switchdb(nn):
+def switchdb(newfile):
     global DB
     DB.commit()
     try:
-        nDB = sqlite3.connect(nn,5,0,"DEFERRED",False,AmphDatabase)
-        DB = nDB
+        DB = sqlite3.connect(newfile, 5, 0, "DEFERRED", False, AmphDatabase)
     except Exception, e:
         from PyQt4.QtGui import QMessageBox as qmb
         qmb.information(None, "Database Error", "Failed to switch to the new database:\n" + str(e))
-
-
-
-
-#Item = ItemStatistics()
-
-

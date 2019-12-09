@@ -1,4 +1,3 @@
-
 from __future__ import with_statement, division
 
 import time
@@ -172,14 +171,14 @@ class PerformanceHistory(QWidget):
 
         group = ''
         if g == 1: # by Settings.get('def_group_by')
-            DB.resetCounter()
+            DB.reset_counter()
             gn = Settings.get('def_group_by')
             if gn <= 1:
                 gn = 1
             group = "group by cast(counter()/%d as int)" % gn
         elif g == 2: # by sitting
             mis = Settings.get('minutes_in_sitting') * 60.0
-            DB.resetTimeGroup()
+            DB.reset_time_group()
             group = "group by time_group(%f, r.w)" % mis
         elif g == 3: # by day
             group = "group by cast((r.w+4*3600)/86400 as int)"

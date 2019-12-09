@@ -240,9 +240,9 @@ class Quizzer(QWidget):
         is_lesson = DB.fetchone("select discount from source where rowid=?", (None,), (self.text[1], ))[0]
 
         if Settings.get('use_lesson_stats') or not is_lesson:
-            DB.executemany_('''insert into statistic
+            DB.executemany('''insert into statistic
                 (time,viscosity,w,count,mistakes,type,data) values (?,?,?,?,?,?,?)''', vals)
-            DB.executemany_('insert into mistake (w,target,mistake,count) values (?,?,?,?)',
+            DB.executemany('insert into mistake (w,target,mistake,count) values (?,?,?,?)',
                     [(now, k[0], k[1], v) for k, v in mistakes.iteritems()])
 
         if is_lesson:
