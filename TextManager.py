@@ -1,296 +1,286 @@
+#!/usr/bin/env python3
 
-
-
-#import psyco
 import os.path as path
 import time
 import hashlib
 
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk, GObject
+
 from Text import LessonMiner
 from Data import DB
-from QtUtil import *
+import GtkUtil
 from Config import Settings, SettingsEdit, SettingsCombo
 
-from PyQt4.QtCore import *
-from PyQt4.QtGui import *
+class SourceModel(Gtk.TreeStore):
+    columns = {
+        "ID": int,
+        "Source": str,
+        "Length": int,
+        "Results": int,
+        "WPM": float,
+        "Disabled": str,
+        }
 
+    def __init__(self):
+        Gtk.TreeStore.__init__(self)
+        self.set_column_types(list(SourceModel.columns.values()))
 
+        self.populate_data()
 
-class SourceModel(AmphModel):
-    def signature(self):
-        self.hidden = 1
-        return (["Source", "Length", "Results", "WPM", "Dis."],
-                [None, None, None, "%.1f", None])
-
-    def populateData(self, idxs):
-        if len(idxs) == 0:
-            return list(map(list, DB.fetchall("""
+    def populate_data(self):
+        self.clear()
+        for source in DB.fetchall("""
             select s.rowid,s.name,t.count,r.count,r.wpm,ifelse(nullif(t.dis,t.count),'No','Yes')
-                    from source as s
-                    left join (select source,count(*) as count,count(disabled) as dis from text group by source) as t
-                        on (s.rowid = t.source)
-                    left join (select source,count(*) as count,avg(wpm) as wpm from result group by source) as r
-                        on (t.source = r.source)
-                    where s.disabled is null
-                    order by s.name""")))
-
-        if len(idxs) > 1:
-            return []
-
-        r = self.rows[idxs[0]]
-
-        return list(map(list, DB.fetchall("""select t.rowid,substr(t.text,0,40)||"...",length(t.text),r.count,r.m,ifelse(t.disabled,'Yes','No')
+                from source as s
+                left join (select source,count(*) as count,count(disabled) as dis from text group by source) as t
+                    on (s.rowid = t.source)
+                left join (select source,count(*) as count,avg(wpm) as wpm from result group by source) as r
+                    on (t.source = r.source)
+                where s.disabled is null
+                order by s.name"""):
+            s_iter = self.append(None, list(source))
+            for text in DB.fetchall("""
+                select t.rowid,substr(t.text,0,40)||"...",length(t.text),r.count,r.m,ifelse(t.disabled,'Yes','No')
                 from (select rowid,* from text where source = ?) as t
                 left join (select text_id,count(*) as count,agg_median(wpm) as m from result group by text_id) as r
                     on (t.id = r.text_id)
-                order by t.rowid""", (r[0], ))))
+                order by t.rowid""", (source[0], )):
+                self.append(s_iter, list(text))
 
+class TextManager(GtkUtil.AmphBoxLayout):
+    __gsignals__ = {
+        "refresh-sources": (GObject.SignalFlags.RUN_FIRST, None, ()),
+        "go-to-text": (GObject.SignalFlags.RUN_FIRST, None, ()),
+        "set-text": (GObject.SignalFlags.RUN_FIRST, None, (str, int, str)),
+        }
 
+    default_text = (
+        "", 0,
+        "Welcome to Amphetype!\n"
+        "A typing program that not only measures"
+        " your speed and progress, but also gives you"
+        " detailed statistics about problem keys,"
+        " words, common mistakes, and so on. This is"
+        " just a default text since your database is"
+        " empty. You might import a novel or text of"
+        " your choosing and text excerpts will be"
+        " generated for you automatically. There are"
+        " also some facilities to generate lessons"
+        " based on your past statistics! But for now,"
+        " go to the 'Sources' tab and try adding some"
+        " texts from the 'txt' directory.")
 
-class TextManager(QWidget):
-
-    defaultText = ("", 0, """Welcome to Amphetype!
-A typing program that not only measures your speed and progress, but also gives you detailed statistics about problem keys, words, common mistakes, and so on. This is just a default text since your database is empty. You might import a novel or text of your choosing and text excerpts will be generated for you automatically. There are also some facilities to generate lessons based on your past statistics! But for now, go to the "Sources" tab and try adding some texts from the "txt" directory.""")
-
-
-    def __init__(self, *args):
-        super(TextManager, self).__init__(*args)
+    def __init__(self):
+        GtkUtil.AmphBoxLayout.__init__(self, orientation=Gtk.Orientation.HORIZONTAL)
 
         self.diff_eval = lambda x: 1
         self.model = SourceModel()
-        tv = AmphTree(self.model)
-        tv.resizeColumnToContents(1)
-        tv.setColumnWidth(0, 300)
-        self.connect(tv, SIGNAL("doubleClicked(QModelIndex)"), self.doubleClicked)
-        self.tree = tv
 
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 100)
-        self.progress.hide()
+        treeview = GtkUtil.AmphTreeView(self.model)
+        self.tree = treeview.treeview
+        self.tree.connect("row-activated", self.double_clicked)
+        self.tree.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
 
-        self.setLayout(AmphBoxLayout(
-                [
-                    ([
-                        "Below you will see the different text sources used. Disabling texts or sources deactivates them so they won't be selected for typing. You can double click a text to do that particular text.\n",
-                        (self.tree, 1),
-                        self.progress,
-                        [AmphButton("Import Texts", self.addFiles), None,
-                            AmphButton("Enable All", self.enableAll),
-                            AmphButton("Delete Disabled", self.removeDisabled), None,
-                            AmphButton("Update List", self.update)],
-                        [ #AmphButton("Remove", self.removeSelected), "or",
-                            AmphButton("Toggle disabled", self.disableSelected),
-                            "on all selected texts that match <a href=\"http://en.wikipedia.org/wiki/Regular_expression\">regular expression</a>",
-                            SettingsEdit('text_regex')]
-                    ], 1),
-                    [
-                        ["Selection method for new lessons:",
-                            SettingsCombo('select_method', ['Random', 'In Order', 'Difficult', 'Easy']), None],
-                        "(in order works by selecting the next text after the one you completed last, in the order they were added to the database, easy/difficult works by estimating your WPM for several random texts and choosing the fastest/slowest)\n",
-                        20,
-                        AmphGridLayout([
-                            [("Repeat <i>texts</i> that don't meet the following requirements:\n", (1, 3))],
-                            ["WPM:", SettingsEdit("min_wpm")],
-                            ["Accuracy:", SettingsEdit("min_acc"), (None, (0, 1))],
-                            [("Repeat <i>lessons</i> that don't meet the following requirements:\n", (1, 3))],
-                            ["WPM:", SettingsEdit("min_lesson_wpm")],
-                            ["Accuracy:", SettingsEdit("min_lesson_acc")],
-                        ]),
-                        None
-                    ]
-                ], QBoxLayout.LeftToRight))
+        self.progress = Gtk.ProgressBar()
 
-        self.connect(Settings, SIGNAL("change_select_method"), self.setSelect)
-        self.setSelect(Settings.get('select_method'))
+        self.append_layout([
+            [
+                "Below you will see the different text sources used. Disabling"
+                " texts or sources deactivates them so they won't be selected for"
+                " typing. You can double click a text to do that particular text.\n",
+                (treeview, ),
+                self.progress,
+                [GtkUtil.new_button("Import Texts", self.add_files),
+                 GtkUtil.new_button("Enable All", self.enable_all),
+                 GtkUtil.new_button("Delete Disabled", self.delete_disabled),
+                 GtkUtil.new_button("Update List", self.update)],
+                [GtkUtil.new_button("Toggle", self.toggle_selected),
+                 " all texts that match regular expression",
+                 SettingsEdit("text_regex")],
+            ], [
+                ["Selection method for new lessons",
+                 SettingsCombo('select_method', ['Random', 'In Order', 'Difficult', 'Easy'])],
+                "(in order works by selecting the next text after the one you"
+                " completed last, in the order they were added to the database,"
+                " easy/difficult works by estimating your WPM for several random"
+                " texts and choosing the fastest/slowest)\n",
+                0,
+                "Repeat texts that don't meet the following requirements",
+                ["WPM:", SettingsEdit("min_wpm")],
+                ["Accuracy:", SettingsEdit("min_acc")],
+                "Repeat lessons that don't meet the following requiements",
+                ["WPM:", SettingsEdit("min_lesson_wpm")],
+                ["Accuracy:", SettingsEdit("min_lesson_acc")],
+            ]])
 
-    def setSelect(self, v):
-        if v == 0 or v == 1:
+        Settings.connect("change_select_method", lambda *_: self.set_select())
+        self.set_select()
+
+    def set_select(self):
+        method = Settings.get("select_method")
+        if method in (0, 1):
             self.diff_eval = lambda x: 1
-            self.nextText()
+            self.next_text()
             return
 
-        hist = time.time() - 86400.0 * Settings.get('history')
-        tri = dict(
-                DB.execute("""
-                    select data,agg_median(time) as wpm from statistic
-                    where w >= ? and type = 1
-                    group by data""", (hist, )).fetchall()) #[(t, (m, c)) for t, m, c in
+        hist = time.time() - 86400 * Settings.get("history")
+        tri = dict(DB.execute("""
+            select data,agg_median(time) as wpm from statistic
+            where w >= ? and type = 1
+            group by data""", (hist, )).fetchall())
 
-        g = list(tri.values())
-        if len(g) == 0:
-            return lambda x: 1
-        g.sort(reverse=True)
-        expect = g[len(g)//4]
-        def _func(v):
-            text = v[2]
-            v = 0
-            s = 0.0
+        vals = list(tri.values())
+        if not vals:
+            self.diff_eval = lambda x: 1
+            self.next_text()
+            return
+        vals.sort(reverse=True)
+        expect = vals[len(vals) // 4]
+
+        def func(target):
+            text = target[2]
+            # FIXME what does v do here?
+            # v = 0
+            total = 0.0
             for i in range(0, len(text)-2):
-                t = text[i:i+3]
-                if t in tri:
-                    s += tri[t]
+                trigram = text[i:i+3]
+                if trigram in tri:
+                    total += tri[trigram]
                 else:
-                    #print "|", t,
-                    s += expect
-                    v +=1
-            avg = s / (len(text)-2)
-            #print text
-            #print " v=%d,s=%f" % (v, 12.0/avg), "ex:", expect
+                    total += expect
+                    # v += 1
+            avg = total / (len(text)-2)
             return 12.0/avg
+        self.diff_eval = func
+        self.next_text()
 
-        self.diff_eval = _func
-        self.nextText()
+    def add_files(self):
+        filepicker = Gtk.FileChooserDialog()
+        filepicker.add_button(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
+        filepicker.add_button(Gtk.STOCK_OPEN, Gtk.ResponseType.ACCEPT)
+        result = filepicker.run()
+        fname = filepicker.get_filename()
+        filepicker.destroy()
+        if result == Gtk.ResponseType.CANCEL or fname is None:
+            return
 
-    def addFiles(self):
+        lminer = LessonMiner(fname)
+        lminer.connect("progress", lambda p: self.progress.set_fraction(p/100))
+        self.add_texts(fname, lminer, update=False)
+        self.progress.set_fraction(0)
 
-        qf = QFileDialog(self, "Import Text From File(s)")
-        qf.setFilters(["UTF-8 text files (*.txt)", "All files (*)"])
-        qf.setFileMode(QFileDialog.ExistingFiles)
-        qf.setAcceptMode(QFileDialog.AcceptOpen)
-
-        self.connect(qf, SIGNAL("filesSelected(QStringList)"), self.setImpList)
-
-        qf.show()
-
-    def setImpList(self, files):
-        self.sender().hide()
-        self.progress.show()
-        for x in map(str, files):
-            self.progress.setValue(0)
-            fname = path.basename(x)
-            lm = LessonMiner(x)
-            self.connect(lm, SIGNAL("progress(int)"), self.progress.setValue)
-            self.addTexts(fname, lm, update=False)
-
-        self.progress.hide()
         self.update()
         DB.commit()
 
-    def addTexts(self, source, texts, lesson=None, update=True):
-        id = DB.get_source(source, lesson)
-        r = []
-        for x in texts:
-            h = hashlib.sha1()
-            h.update(x.encode('utf-8'))
-            txt_id = h.hexdigest()
+    def update(self):
+        self.emit("refresh-sources")
+        self.model.populate_data()
+
+
+    def add_texts(self, source, texts, lesson=None, update=True):
+        idx = DB.get_source(source, lesson)
+        out = []
+        for text in texts:
+            hasher = hashlib.sha1()
+            hasher.update(text.encode("utf-8"))
+            text_hash = hasher.hexdigest()
             dis = 1 if lesson == 2 else None
             try:
                 DB.execute("insert into text (id,text,source,disabled) values (?,?,?,?)",
-                           (txt_id, x, id, dis))
-                r.append(txt_id)
-            except Exception as e:
+                           (text_hash, text, idx, dis))
+                out.append(text_hash)
+            except Exception:
+                # TODO properly handle exception
                 pass # silently skip ...
         if update:
             self.update()
         if lesson:
             DB.commit()
-        return r
+        return out
 
-    def newReview(self, review):
-        q = self.addTexts("<Reviews>", [review], lesson=2, update=False)
-        if q:
-            v = DB.fetchone("select id,source,text from text where id = ?", self.defaultText, q)
-            self.emit(SIGNAL("setText"), v)
+    def new_review(self, review):
+        added = self.add_texts("<Reviews>", [review], lesson=2, update=False)
+        if added:
+            tgt = DB.fetchone("select id,source,text from text where id = ?",
+                              self.default_text, added)
+            self.emit("set-text", *tgt)
         else:
-            self.nextText()
+            self.next_text()
 
-    def update(self):
-        self.emit(SIGNAL("refreshSources"))
-        self.model.reset()
-
-    def nextText(self):
-
-        type = Settings.get('select_method')
-
-        if type != 1:
+    def next_text(self):
+        kind = Settings.get("select_method")
+        if kind != 1:
             # Not in order
-            v = DB.execute("select id,source,text from text where disabled is null order by random() limit %d" % Settings.get('num_rand')).fetchall()
-            if len(v) == 0:
-                v = None
-            elif type == 2:
-                v = min(v, key=self.diff_eval)
-            elif type == 3:
-                v = max(v, key=self.diff_eval)
+            targets = DB.execute(
+                f"""select id,source,text from text where disabled is null
+                order by random() limit {Settings.get("num_rand")}""").fetchall()
+            if not targets:
+                target = None
+            elif kind == 2:
+                target = min(targets, key=self.diff_eval)
+            elif kind == 3:
+                target = max(targets, key=self.diff_eval)
             else:
-                v = v[0] # random, just pick the first
+                target = targets[0] # random, just pick the first
         else:
             # Fetch in order
-            lastid = (0,)
-            g = DB.fetchone("""select r.text_id
+            prev = (0,)
+            result = DB.fetchone("""select r.text_id
                 from result as r left join source as s on (r.source = s.rowid)
                 where (s.discount is null) or (s.discount = 1) order by r.w desc limit 1""", None)
-            if g is not None:
-                lastid = DB.fetchone("select rowid from text where id = ?", lastid, g)
-            v = DB.fetchone("select id,source,text from text where rowid > ? and disabled is null order by rowid asc limit 1", None, lastid)
+            if result is not None:
+                prev = DB.fetchone("select rowid from text where id = ?", prev, result)
+            target = DB.fetchone("""select id,source,text from text
+                where rowid > ? and disabled is null order by rowid asc limit 1""", None, prev)
+        if target is None:
+            target = self.default_text
 
-        if v is None:
-            v = self.defaultText
+        self.emit("set-text", *target)
 
-        self.emit(SIGNAL("setText"), v)
+    def enable_all(self):
+        DB.execute('update text set disabled = null where disabled is not null')
+        self.update()
 
-    def removeUnused(self):
-        DB.execute('''
+    def delete_disabled(self):
+        DB.execute('delete from text where disabled is not null')
+        DB.execute("""
             delete from source where rowid in (
                 select s.rowid from source as s
                     left join result as r on (s.rowid=r.source)
                     left join text as t on (t.source=s.rowid)
                 group by s.rowid
                 having count(r.rowid) = 0 and count(t.rowid) = 0
-            )''')
-        DB.execute('''
+            )""")
+        DB.execute("""
             update source set disabled = 1 where rowid in (
                 select s.rowid from source as s
                     left join result as r on (s.rowid=r.source)
                     left join text as t on (t.source=s.rowid)
                 group by s.rowid
                 having count(r.rowid) > 0 and count(t.rowid) = 0
-            )''')
-        self.emit(SIGNAL("refreshSources"))
-
-    def removeDisabled(self):
-        DB.execute('delete from text where disabled is not null')
-        self.removeUnused()
+            )""")
+        self.emit("refresh-sources")
         self.update()
         DB.commit()
 
-    def enableAll(self):
-        DB.execute('update text set disabled = null where disabled is not null')
-        self.update()
+    def toggle_selected(self):
+        # TODO implement
+        # use Gtk.TreeModelRow
+        pass
 
-    def disableSelected(self):
-        cats, texts = self.getSelected()
-        DB.set_regex(Settings.get('text_regex'))
-        DB.executemany("""update text set disabled = ifelse(disabled,NULL,1)
-                where rowid = ? and regex_match(text) = 1""",
-                       [(x, ) for x in texts])
-        DB.executemany("""update text set disabled = ifelse(disabled,NULL,1)
-                where source = ? and regex_match(text) = 1""",
-                       [(x, ) for x in cats])
-        self.update()
-
-    def getSelected(self):
-        texts = []
-        cats = []
-        for idx in self.tree.selectedIndexes():
-            if idx.column() != 0:
-                continue
-            if idx.parent().isValid():
-                texts.append(self.model.data(idx, Qt.UserRole)[0])
-            else:
-                cats.append(self.model.data(idx, Qt.UserRole)[0])
-        return (cats, texts)
-
-    def doubleClicked(self, idx):
-        p = idx.parent()
-        if not p.isValid():
+    def double_clicked(self, treeview, where, _column):
+        model = treeview.get_model()
+        if model.iter_depth(model.get_iter(where)) == 0:
             return
 
-        q = self.model.data(idx, Qt.UserRole)
-        v = DB.fetchall('select id,source,text from text where rowid = ?', (q[0], ))
+        row = Gtk.TreeModelRow(model, where)
+        tgts = DB.fetchall("select id,source,text from text where rowid = ?", (row[0], ))
 
-        self.cur = v[0] if len(v) > 0 else self.defaultText
-        self.emit(SIGNAL("setText"), self.cur)
-        self.emit(SIGNAL("gotoText"))
+        cur = tgts[0] if tgts else self.default_text
+        self.emit("set-text", *cur)
+        self.emit("go-to-text")
 
-
-
+if __name__ == '__main__':
+    GtkUtil.show_in_window(TextManager())

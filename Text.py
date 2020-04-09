@@ -1,12 +1,13 @@
-# -*- coding: UTF-8 -*-
-
+#!/usr/bin/env python3
 
 import re
 import codecs
 import random
+
+import gi
+from gi.repository import GObject
+
 from Config import Settings
-from itertools import *
-from PyQt4.QtCore import *
 
 abbreviations = {
         '1', '10', '11', '12', '2', '3', '4', '5', '6', '7', '8', '9',
@@ -14,7 +15,7 @@ abbreviations = {
         'Dak', 'Del', 'Fed', 'Fla', 'Ga', 'Ia', 'Id', 'Ida', 'Ill', 'Ind',
         'Is', 'Kan', 'Kans', 'Ken', 'Ky', 'La', 'Man', 'Mass', 'Md', 'Me',
         'Mex', 'Mich', 'Minn', 'Miss', 'Mo', 'Mont', 'Neb', 'Nebr', 'Nev',
-        'Ok', 'Okla', 'Ont', 'Ore', 'Pa', 'Penn', 'Penna', 'Qué', 'Sask',
+        'Ok', 'Okla', 'Ont', 'Ore', 'Pa', 'Penn', 'Penna', 'Que', 'Sask',
         'Tenn', 'Tex', 'USAFA', 'Ut', 'Va', 'Vt', 'Wash', 'Wis', 'Wisc', 'Wy',
         'Wyo', 'Yuk', 'adm', 'al', 'apr', 'arc', 'assn', 'atty', 'attys',
         'aug', 'ave', 'avg', 'bld', 'blvd', 'bros', 'capt', 'cl', 'cmdr', 'co',
@@ -27,84 +28,87 @@ abbreviations = {
         'tce', 'univ', 'viz', 'vs'
         }
 
-class SentenceSplitter(object):
+class SentenceSplitter():
     def __init__(self, text):
         self.string = text
 
     def __iter__(self):
-        p = [0]
-        sen = r"""(?:(?: |^)[^\w. ]*(?P<pre>\w+)[^ .]*\.+|[?!]+)['"]?(?= +(?:[^ a-z]|$))|$"""
-        sen_re = re.compile(sen)
-        return filter(None, map(lambda x: self.pars(p, x), self.sen.finditer(self.string)))
+        parts = [0]
+        sentence = r"""(?:(?: |^)[^\w. ]*(?P<pre>\w+)[^ .]*\.+|[?!]+)['"]?(?= +(?:[^ a-z]|$))|$"""
+        sen_re = re.compile(sentence)
+        return filter(None, [self.pars(parts, x) for x in sen_re.finditer(self.string)])
 
-    def pars(self, p, mat):
+    def pars(self, parts, mat):
         is_abbr = lambda s: s.lower() in abbreviations or s in abbreviations
         if mat.group('pre') and is_abbr(mat.group('pre')):
             return None
-        p.append(mat.end())
-        return self.string[p[-2]:p[-1]].strip()
+        parts.append(mat.end())
+        return self.string[parts[-2]:parts[-1]].strip()
 
-class LessonMiner(QObject):
+class LessonMiner(GObject.Object):
+    __gsignals__ = {
+        'progress': (GObject.SignalFlags.RUN_FIRST, None, (int, ))
+        }
+
     def __init__(self, fname):
-        super(LessonMiner, self).__init__()
-        #print time.clock()
+        GObject.Object.__init__(self)
         with codecs.open(fname, "r", "utf_8_sig") as file:
             self.paras = self.get_paras(file)
         self.lessons = None
-        self.min_chars = Settings.get('min_chars')
+        self.min_chars = Settings.get("min_chars")
 
-    def doIt(self):
+    def generate_lessons(self):
         self.lessons = []
         backlog = []
         backlen = 0
-        i = 0
-        for par in self.paras:
+        for i, par in enumerate(self.paras):
             if backlog:
                 backlog.append(None)
-            for sent in par:
-                backlog.append(sent)
-                backlen += len(sent)
-                if backlen >= self.min_chars:
-                    self.lessons.append(self.popFormat(backlog))
-                    backlen = 0
-            i += 1
-            self.emit(SIGNAL("progress(int)"), int(100 * i/len(self.paras)))
-        if backlen > 0:
-            self.lessons.append(self.popFormat(backlog))
 
-    def popFormat(self, lst):
-        #print lst
+            for sentence in par:
+                backlog.append(sentence)
+                backlen += len(sentence)
+                if backlen >= self.min_chars:
+                    self.lessons.append(self.format(backlog))
+                    backlog = []
+                    backlen = 0
+
+            self.emit("progress", 100 * i // len(self.paras))
+        if backlen:
+            self.lessons.append(self.format(backlog))
+
+    def format(self, fragments):
         ret = []
         part = []
-        while lst:
-            item = lst.pop(0)
+        for item in fragments:
             if item is not None:
                 part.append(item)
             else:
                 ret.append(' '.join(part))
                 part = []
+
         if part:
             ret.append(' '.join(part))
         return '\n'.join(ret)
 
     def __iter__(self):
         if self.lessons is None:
-            self.doIt()
+            self.generate_lessons()
         return iter(self.lessons)
 
     def get_paras(self, file):
-        p = []
-        ps = []
+        partial = []
+        output = []
         for line in file:
             line = line.strip()
-            if line != '':
-                p.append(line)
-            elif p:
-                ps.append(SentenceSplitter(" ".join(p)))
-                p = []
-        if p:
-            ps.append(SentenceSplitter(" ".join(p)))
-        return ps
+            if line:
+                partial.append(line)
+            elif partial:
+                output.append(SentenceSplitter(" ".join(partial)))
+                partial = []
+        if partial:
+            output.append(SentenceSplitter(" ".join(partial)))
+        return output
 
 def to_lessons(sentences):
     backlog = []
@@ -119,9 +123,9 @@ def to_lessons(sentences):
             idx = sent.find(' ', sweet_size)
             if idx == -1:
                 break
-            if idx != -1:
-                ssplit.append(sent[:idx])
-                sent = sent[idx+1:]
+            ssplit.append(sent[:idx])
+            sent = sent[idx+1:]
+
         ssplit.append(sent)
         for part in ssplit:
             backlog.append(part)
@@ -130,7 +134,8 @@ def to_lessons(sentences):
                 yield ' '.join(backlog)
                 backlog = []
                 backlen = 0
-    if backlen > 0:
+
+    if backlen:
         yield ' '.join(backlog)
 
 class LessonGeneratorPlain():
@@ -153,4 +158,4 @@ class LessonGeneratorPlain():
 if __name__ == '__main__':
     import sys
     for x in LessonMiner(sys.argv[1]):
-        print("--%s--" % x)
+        print(f"--{x}--")

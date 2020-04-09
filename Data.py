@@ -1,9 +1,11 @@
-
-from Config import Settings
+#!/usr/bin/env python3
 
 import bisect
 import sqlite3
 import re
+
+import GtkUtil
+from Config import Settings, database_path
 
 def trimmed_average(total, series):
     s_val = 0.0
@@ -45,6 +47,7 @@ class Statistic(list):
             self.flawed_ += 1
 
     def __cmp__(self, other):
+        cmp = lambda a, b: (a > b) - (b > a)
         return cmp(self.median(), other.median())
 
     def measurement(self):
@@ -68,7 +71,7 @@ class MedianAggregate(Statistic):
     def finalize(self):
         return self.median()
 
-class MeanAggregate(object):
+class MeanAggregate():
     def __init__(self):
         self.sum_ = 0.0
         self.count_ = 0
@@ -80,7 +83,7 @@ class MeanAggregate(object):
     def finalize(self):
         return self.sum_ / self.count_
 
-class FirstAggregate(object):
+class FirstAggregate():
     def __init__(self):
         self.val = None
 
@@ -177,7 +180,7 @@ create view text_source as
         return self.get_source(source)
 
 # GLOBAL
-DB = sqlite3.connect(Settings.get("db_name"), 5, 0, "DEFERRED", False, AmphDatabase)
+DB = sqlite3.connect(database_path(), 5, 0, "DEFERRED", False, AmphDatabase)
 
 def switchdb(newfile):
     global DB
@@ -185,5 +188,4 @@ def switchdb(newfile):
     try:
         DB = sqlite3.connect(newfile, 5, 0, "DEFERRED", False, AmphDatabase)
     except Exception as e:
-        from PyQt4.QtGui import QMessageBox as qmb
-        qmb.information(None, "Database Error", "Failed to switch to the new database:\n" + str(e))
+        GtkUtil.show_dialog("Database Error", "Failed to switch to the new database:\n" + str(e))

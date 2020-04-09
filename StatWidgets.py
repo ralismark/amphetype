@@ -1,86 +1,74 @@
-
-
-
+#!/usr/bin/env python3
 import time
 
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk
+
 from Data import DB
-from QtUtil import *
-from Text import LessonGeneratorPlain
+import GtkUtil
+import Text
 from Config import Settings, SettingsCombo, SettingsEdit
 
-from PyQt4.QtCore import *
-from PyQt4.QtGui import *
+class WordModel(GtkUtil.AmphModel):
+    columns = {
+        "Item": str,
+        "Speed (wpm)": float,
+        "Accuracy (%)": float,
+        "Viscosity": float,
+        "Count": int,
+        "Mistakes": int,
+        "Impact": float,
+        }
 
-
-
-class WordModel(AmphModel):
-    def signature(self):
-        self.words = []
-        return (["Item", "Speed", "Accuracy", "Viscosity", "Count", "Mistakes", "Impact"],
-                [None, "%.1f wpm", "%.1f%%", "%.1f", None, None, "%.1f"])
-
-    def populateData(self, idx):
-        if len(idx) != 0:
-            return []
-
-        return self.words
-
-    def setData(self, words):
-        self.words = list(map(list, words))
-        self.reset()
-
-
-
-
-class StringStats(QWidget):
-    def __init__(self, *args):
-        super(StringStats, self).__init__(*args)
-
+class StringStats(GtkUtil.AmphBoxLayout):
+    def __init__(self):
+        GtkUtil.AmphBoxLayout.__init__(self)
         self.model = WordModel()
-        tw = AmphTree(self.model)
-        tw.setIndentation(0)
-        tw.setUniformRowHeights(True)
-        tw.setRootIsDecorated(False)
-        self.stats = tw
+        treeview = GtkUtil.AmphTreeView(self.model)
 
-        ob = SettingsCombo('ana_which', [
-                    ('wpm asc', 'slowest'),
-                    ('wpm desc', 'fastest'),
-                    ('viscosity desc', 'least fluid'),
-                    ('viscosity asc', 'most fluid'),
-                    ('accuracy asc', 'least accurate'),
-                    ('misses desc', 'most mistyped'),
-                    ('total desc', 'most common'),
-                    ('damage desc', 'most damaging'),
-                    ])
+        self.update()
 
-        wc = SettingsCombo('ana_what', ['keys', 'trigrams', 'words'])
+        which = SettingsCombo('ana_which', [
+            ('wpm asc', 'slowest'),
+            ('wpm desc', 'fastest'),
+            ('viscosity desc', 'least fluid'),
+            ('viscosity asc', 'most fluid'),
+            ('accuracy asc', 'least accurate'),
+            ('misses desc', 'most mistyped'),
+            ('total desc', 'most common'),
+            ('damage desc', 'most damaging'),
+            ])
+
+        what = SettingsCombo('ana_what', ['keys', 'trigrams', 'words'])
         lim = SettingsEdit('ana_many')
-        self.w_count = SettingsEdit('ana_count')
+        mincount = SettingsEdit('ana_count')
 
-        self.connect(Settings, SIGNAL("change_ana_which"), self.update)
-        self.connect(Settings, SIGNAL("change_ana_what"), self.update)
-        self.connect(Settings, SIGNAL("change_ana_many"), self.update)
-        self.connect(Settings, SIGNAL("change_ana_count"), self.update)
-        self.connect(Settings, SIGNAL("history"), self.update)
+        # XXX why are sometimes no args provided, sometimes Config.Settings?
+        Settings.connect("change_ana_which", lambda *_: self.update())
+        Settings.connect("change_ana_what", lambda *_: self.update())
+        Settings.connect("change_ana_many", lambda *_: self.update())
+        Settings.connect("change_ana_count", lambda *_: self.update())
 
-        self.setLayout(AmphBoxLayout([
-                ["Display statistics about the", ob, wc, None, AmphButton("Update List", self.update)],
-                ["Limit list to", lim, "items and don't show items with a count less than", self.w_count,
-                    None, AmphButton("Send List to Lesson Generator",
-                         lambda: self.emit(SIGNAL("lessonStrings"), [x[0] for x in self.model.words]))],
-                (self.stats, 1)
-            ]))
+        # TODO send lessons to generator
+        send_to_generator = lambda: None
 
-    def update(self, *arg):
+        self.append_layout([
+            ["Display statistics about the", which, what, None,
+             GtkUtil.new_button("Update list", self.update),
+             GtkUtil.new_button("Send list to Lesson Generator", send_to_generator)],
+            ["Limit list to", lim, "items and don't show items with a count less than", mincount],
+            (treeview, ),
+            ])
 
-        ord = Settings.get('ana_which')
-        cat = Settings.get('ana_what')
-        limit = Settings.get('ana_many')
-        count = Settings.get('ana_count')
-        hist = time.time() - Settings.get('history') * 86400.0
+    def update(self):
+        which = Settings.get("ana_which")
+        what = Settings.get("ana_what")
+        limit = Settings.get("ana_many")
+        least = Settings.get("ana_count")
+        hist = time.time() - Settings.get("history") * 86400.0
 
-        sql = """select data,12.0/time as wpm,
+        sql = f"""select data,12.0/time as wpm,
             100.0-100.0*misses/cast(total as real) as accuracy,
             viscosity,total,misses,
             total*time*time*(1.0+misses/total) as damage
@@ -89,7 +77,9 @@ class StringStats(QWidget):
                     sum(count) as total,sum(mistakes) as misses
                     from statistic where w >= ? and type = ? group by data)
                 where total >= ?
-                order by %s limit %d""" % (ord, limit)
+                order by {which} limit {limit}"""
 
-        self.model.setData(DB.fetchall(sql, (hist, cat, count)))
+        self.model.set_stats(DB.fetchall(sql, (hist, what, least)))
 
+if __name__ == '__main__':
+    GtkUtil.show_in_window(StringStats())

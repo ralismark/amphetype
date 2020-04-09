@@ -1,111 +1,70 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 
+import argparse
 
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk
 
-import os
-import sys
-
-
-# Get command-line --database argument before importing
-# modules which count on database support
-from Config import Settings
-
-import optparse
-opts = optparse.OptionParser()
-opts.add_option("-d", "--database", metavar="FILE", help="use database FILE")
-v = opts.parse_args()[0]
-
-if v.database is not None:
-    Settings.set('db_name', v.database)
-
+from Config import Settings, PreferenceWidget
 from Data import DB
 from Quizzer import Quizzer
 from StatWidgets import StringStats
 from TextManager import TextManager
 from Performance import PerformanceHistory
-from Config import PreferenceWidget
 from Lesson import LessonGenerator
-from Widgets.Database import DatabaseWidget
+from Database import DatabaseWidget
 
-from PyQt4.QtCore import *
-from PyQt4.QtGui import *
+class App(Gtk.Window):
+    def __init__(self):
+        Gtk.Window.__init__(self)
+        self.set_title("Amphetype")
 
-QApplication.setStyle('cleanlooks')
-
-
-class TyperWindow(QMainWindow):
-    def __init__(self, *args):
-        super(TyperWindow, self).__init__(*args)
-
-        self.setWindowTitle("Amphetype")
-
-        tabs = QTabWidget()
+        notebook = Gtk.Notebook()
+        self.add(notebook)
 
         quiz = Quizzer()
-        tabs.addTab(quiz, "Typer")
+        notebook.append_page(quiz, Gtk.Label.new("Typer"))
 
-        tm = TextManager()
-        self.connect(quiz, SIGNAL("wantText"), tm.nextText)
-        self.connect(tm, SIGNAL("setText"), quiz.setText)
-        self.connect(tm, SIGNAL("gotoText"), lambda: tabs.setCurrentIndex(0))
-        tabs.addTab(tm, "Sources")
+        textm = TextManager()
+        notebook.append_page(textm, Gtk.Label.new("Sources"))
+        quiz.connect("want-text", lambda _: textm.next_text())
+        textm.connect("set-text", lambda _, *text: quiz.set_target(text))
+        textm.connect("go-to-text", lambda _: notebook.set_current_page(0))
 
-        ph = PerformanceHistory()
-        self.connect(tm, SIGNAL("refreshSources"), ph.refreshSources)
-        self.connect(quiz, SIGNAL("statsChanged"), ph.updateData)
-        self.connect(ph, SIGNAL("setText"), quiz.setText)
-        self.connect(ph, SIGNAL("gotoText"), lambda: tabs.setCurrentIndex(0))
-        tabs.addTab(ph, "Performance")
+        perf = PerformanceHistory()
+        notebook.append_page(perf, Gtk.Label.new("Performance"))
+        textm.connect("refresh-sources", lambda _: perf.refresh_sources())
+        quiz.connect("stats-changed", lambda _: perf.update_data())
+        perf.connect("set-text", lambda *text: quiz.set_target(text))
+        perf.connect("go-to-text", lambda _: notebook.set_current_page(0))
 
-        st = StringStats()
-        self.connect(st, SIGNAL("lessonStrings"), lambda x: tabs.setCurrentIndex(4))
-        tabs.addTab(st, "Analysis")
+        stats = StringStats()
+        notebook.append_page(stats, Gtk.Label.new("Analysis"))
+        # stats.connect("lesson-strings", lambda _: notebook.set_current_page(4))
 
-        lg = LessonGenerator()
-        self.connect(st, SIGNAL("lessonStrings"), lg.addStrings)
-        self.connect(lg, SIGNAL("newLessons"), lambda: tabs.setCurrentIndex(1))
-        self.connect(lg, SIGNAL("newLessons"), tm.addTexts)
-        self.connect(quiz, SIGNAL("wantReview"), lg.wantReview)
-        self.connect(lg, SIGNAL("newReview"), tm.newReview)
-        tabs.addTab(lg, "Lesson Generator")
+        lgen = LessonGenerator()
+        notebook.append_page(lgen, Gtk.Label.new("Lesson Generator"))
+        # stats.connect("lesson-strings", lgen.add_strings)
+        lgen.connect("new-lessons", lambda _, _2: notebook.set_current_page(1))
+        lgen.connect("new-lessons", textm.add_texts)
+        # quiz.connect("want-review", ...)
+        lgen.connect("new-review", textm.new_review)
 
-        dw = DatabaseWidget()
-        tabs.addTab(dw, "Database")
+        dbase = DatabaseWidget()
+        notebook.append_page(dbase, Gtk.Label.new("Database"))
 
-        pw = PreferenceWidget()
-        tabs.addTab(pw, "Preferences")
+        pref = PreferenceWidget()
+        notebook.append_page(pref, Gtk.Label.new("Preferences"))
 
-        ab = AboutWidget()
-        tabs.addTab(ab, "About/Help")
+        textm.next_text()
 
-        self.setCentralWidget(tabs)
+def main():
+    app = App()
+    app.show_all()
+    app.connect("destroy", Gtk.main_quit)
+    Gtk.main()
+    DB.commit()
 
-        tm.nextText()
-
-    def sizeHint(self):
-        return QSize(650, 400)
-
-class AboutWidget(QTextBrowser):
-    def __init__(self, *args):
-        html = "about.html file missing!"
-        try:
-            html = open("about.html", "r").read()
-        except:
-            pass
-        super(AboutWidget, self).__init__(*args)
-        self.setHtml(html)
-        self.setOpenExternalLinks(True)
-        #self.setMargin(40)
-        self.setReadOnly(True)
-
-app = QApplication(sys.argv)
-
-w = TyperWindow()
-w.show()
-
-app.exec_()
-
-print("exit")
-DB.commit()
-
-
+if __name__ == "__main__":
+    main()

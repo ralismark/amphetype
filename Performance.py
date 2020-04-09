@@ -1,71 +1,69 @@
-
+#!/usr/bin/env python3
 
 import time
-from itertools import *
-import operator
 
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk, GObject
+
+import GtkUtil
 from Data import DB
 from Config import Settings, SettingsEdit, SettingsCombo, SettingsCheckBox
-from QtUtil import *
+import Plotters
 
-import Widgets.Plotters as Plotters
+def dampen(seq, window=10):
+    total = sum(seq[:window])
+    for i in range(window, len(seq)):
+        yield total/window
+        total += seq[i] - seq[i-window]
 
-from PyQt4.QtCore import *
-from PyQt4.QtGui import *
+def format_when(when):
+    delta = time.time() - when
 
+    if delta < 60.0:
+        return f"{delta:.1f}s"
+    delta /= 60.0
+    if delta < 60.0:
+        return f"{delta:.1f}m"
+    delta /= 60.0
+    if delta < 24.0:
+        return f"{delta:.1f}h"
+    delta /= 24.0
+    if delta < 7.0:
+        return f"{delta:.1f}d"
+    delta /= 7.0
+    if delta < 52.0:
+        return f"{delta:.1f}w"
+    delta /= 52.0
+    return f"{delta:.1f}y"
 
-def dampen(x, n=10):
-    ret = []
-    s = sum(x[0:n])
-    q = 1/n
-    for i in range(n, len(x)):
-        ret.append(s*q)
-        s += x[i] - x[i-n]
-    return ret
+class ResultModel(GtkUtil.AmphModel):
+    columns = {
+        "ID": {
+            "type": str,
+            "hidden": True,
+            },
+        "When": {
+            "type": float,
+            "renderer": format_when,
+            },
+        "Source": str,
+        "WPM": {
+            "type": float,
+            "renderer": "{:.2f}".format,
+            },
+        "Accuracy (%)": float,
+        "Viscosity": float,
+        }
 
+class PerformanceHistory(GtkUtil.AmphBoxLayout):
+    __gsignals__ = {
+        "go-to-text": (GObject.SignalFlags.RUN_FIRST, None, ()),
+        "set-text": (GObject.SignalFlags.RUN_FIRST, None, (str, int, str)),
+        }
 
-class ResultModel(AmphModel):
-    def signature(self):
-        self.source = None
-        self.data_ = []
-        self.hidden = 1
-        return (["When", "Source", "WPM", "Accuracy", "Viscosity"],
-                [self.formatWhen, None, "%.1f", "%.1f%%", "%.1f"])
-
-    def populateData(self, idx):
-        if len(idx) > 0:
-            return []
-
-        return self.data_
-
-    def setData(self, d):
-        self.data_ = d
-        self.reset()
-
-    def formatWhen(self, w):
-        d = time.time() - w
-
-        if d < 60.0:
-            return "%.1fs" % d
-        d /= 60.0
-        if d < 60.0:
-            return "%.1fm" % d
-        d /= 60.0
-        if d < 24.0:
-            return "%.1fh" % d
-        d /= 24.0
-        if d < 7.0:
-            return "%.1fd" % d
-        d /= 7.0
-        if d < 52.0:
-            return "%.1fw" % d
-        d /= 52.0
-        return "%.1fy" % d
-
-
-class PerformanceHistory(QWidget):
-    def __init__(self, *args):
-        super(PerformanceHistory, self).__init__(*args)
+    def __init__(self):
+        GtkUtil.AmphBoxLayout.__init__(self)
 
         self.plotcol = 3
         self.plot = Plotters.Plotter()
@@ -73,129 +71,117 @@ class PerformanceHistory(QWidget):
         self.editflag = False
         self.model = ResultModel()
 
-        self.cb_source = QComboBox()
-        self.refreshSources()
-        self.connect(self.cb_source, SIGNAL("currentIndexChanged(int)"), self.updateData)
+        self.cb_source = Gtk.ComboBoxText()
+        self.refresh_sources()
+        self.cb_source.set_active_id("all")
+        self.cb_source.connect("changed", lambda _: self.update_data())
 
-        t = AmphTree(self.model)
-        t.setUniformRowHeights(True)
-        t.setRootIsDecorated(False)
-        t.setIndentation(0)
-        self.connect(t, SIGNAL("doubleClicked(QModelIndex)"), self.doubleClicked)
-        self.connect(Settings, SIGNAL('change_graph_what'), self.updateGraph)
-        self.connect(Settings, SIGNAL('change_show_xaxis'), self.updateGraph)
-        self.connect(Settings, SIGNAL('change_chrono_x'), self.updateGraph)
-        self.connect(Settings, SIGNAL("change_dampen_graph"), self.updateGraph)
+        tree = GtkUtil.AmphTreeView(self.model)
+        tree.treeview.connect("row-activated", self.double_clicked)
+        Settings.on_any_change(["graph_what", "show_xaxis", "chrono_x", "dampen_graph"],
+                               self.update_graph)
+        Settings.on_any_change(["perf_items", "perf_group_by", "lesson_stats"], self.update_data)
 
-        self.setLayout(AmphBoxLayout([
-                ["Show", SettingsEdit("perf_items"), "items from",
-                    #SettingsCombo('lesson_stats', ["both", "texts", "lessons"]), "limited to",
-                    self.cb_source,
-                    "and group by", SettingsCombo('perf_group_by',
-                        ["<no grouping>", "%d sessions" % Settings.get('def_group_by'), "sitting", "day"]),
-                    None, AmphButton("Update", self.updateData)],
-                (t, 1),
-                ["Plot", SettingsCombo('graph_what', ((3, 'WPM'), (4, 'accuracy'), (5, 'viscosity'))),
-                    SettingsCheckBox("show_xaxis", "Show X-axis"),
-                    SettingsCheckBox("chrono_x", "Use time-scaled X-axis"),
-                    SettingsCheckBox("dampen_graph", "Dampen graph values"), None],
-                (self.plot, 1)
-            ]))
+        self.append_layout([
+            ["Show", SettingsEdit("perf_items"), "items from", self.cb_source,
+             "and group by", SettingsCombo("perf_group_by", [
+                 "<no grouping>", "%d sessions" % Settings.get("def_group_by"), "sitting", "day"]),
+             None, GtkUtil.new_button("Update", self.update_data)],
+            (tree, ),
+            ["Plot", SettingsCombo("graph_what", ((3, "WPM"), (4, "accuracy"), (5, "viscosity"))),
+             SettingsCheckBox("show_xaxis", "Show X-axis"),
+             SettingsCheckBox("chrono_x", "Use time-scaled X-axis"),
+             SettingsCheckBox("dampen_graph", "Dampen graph values")],
+            (self.plot, ),
+            ])
 
-        self.connect(Settings, SIGNAL("change_perf_items"), self.updateData)
-        self.connect(Settings, SIGNAL("change_perf_group_by"), self.updateData)
-        self.connect(Settings, SIGNAL("change_lesson_stats"), self.updateData)
+        self.update_data()
 
-    def updateGraph(self):
-        pc = Settings.get('graph_what')
-        y = [x[pc] for x in self.model.rows]
+    def update_graph(self):
+        what = Settings.get("graph_what")
+        y_coords = [row[what] for row in iter(self.model)]
 
         if Settings.get("chrono_x"):
-            x = [x[1] for x in self.model.rows]
+            x_coords = [row[0] for row in iter(self.model)]
         else:
-            x = list(range(len(y)))
-            x.reverse()
+            x_coords = list(range(len(y_coords)-1, 0-1, -1))
 
         if Settings.get("dampen_graph"):
-            y = dampen(y, Settings.get('dampen_average'))
-            x = dampen(x, Settings.get('dampen_average'))
+            window = Settings.get("dampen_average")
+            y_coords = list(dampen(y_coords, window))
+            x_coords = list(dampen(x_coords, window))
 
-        self.p = Plotters.Plot(x, y)
-        self.plot.setScene(self.p)
+        plot = Plotters.Plot(x_coords, y_coords)
+        self.plot.set_data(plot)
 
-    def refreshSources(self):
+    def refresh_sources(self):
         self.editflag = True
-        self.cb_source.clear()
-        self.cb_source.addItem("<ALL>")
-        self.cb_source.addItem("<LAST TEXT>")
-        self.cb_source.addItem("<ALL TEXTS>")
-        self.cb_source.addItem("<ALL LESSONS>")
-
-        for id, v in DB.fetchall('select rowid,abbreviate(name,30) from source order by name'):
-            self.cb_source.addItem(v, QVariant(id))
+        self.cb_source.remove_all()
+        self.cb_source.append("all", "<ALL>")
+        self.cb_source.append("last text", "<LAST TEXT>")
+        self.cb_source.append("all texts", "<ALL TEXTS>")
+        self.cb_source.append("all lessons", "<ALL LESSONS>")
+        for rid, label in DB.fetchall("select rowid,abbreviate(name,30) from source order by name"):
+            self.cb_source.append(str(rid), label)
         self.editflag = False
 
-    def updateData(self, *args):
+    def update_data(self):
         if self.editflag:
             return
         where = []
-        if self.cb_source.currentIndex() <= 0:
-            pass
-        elif self.cb_source.currentIndex() == 1: # last text
-            where.append('r.text_id = (select text_id from result order by w desc limit 1)')
-        elif self.cb_source.currentIndex() == 2: # all texts
-            where.append('s.discount is null')
-        elif self.cb_source.currentIndex() == 3: # all lessons texts
-            where.append('s.discount is not null')
-        else:
-            s = self.cb_source.itemData(self.cb_source.currentIndex())
-            where.append('r.source = %d' % s.toInt()[0])
+        where_query = ""
+        selected = self.cb_source.get_active_id()
+        if selected == "last text":
+            where.append("r.text_id = (select text_id from result order by w desc limit 1)")
+        elif selected == "all texts":
+            where.append("s.discount is null")
+        elif selected == "all lessons":
+            where.append("s.discount is not null")
+        elif selected and selected.isdigit():
+            rowid = int(selected)
+            where.append(f"r.source = {rowid}")
 
-        if len(where) > 0:
-            where = 'where ' + ' and '.join(where)
-        else:
-            where = ""
+        if where:
+            where_query = "where " + " and ".join(where)
 
-        g = Settings.get('perf_group_by')
-        if g == 0: # no grouping
-            sql = '''select text_id,w,s.name,wpm,100.0*accuracy,viscosity
-                from result as r left join source as s on (r.source = s.rowid)
-                %s %s
-                order by w desc limit %d'''
-        elif g:
-            sql = '''select agg_first(text_id),avg(r.w) as w,count(r.rowid) || ' result(s)',agg_median(r.wpm),
-                        100.0*agg_median(r.accuracy),agg_median(r.viscosity)
-                from result as r left join source as s on (r.source = s.rowid)
-                %s %s
-                order by w desc limit %d'''
+        sql_template = """select agg_first(text_id),avg(r.w) as w,count(r.rowid)
+                || ' result(s)',agg_median(r.wpm),
+                100.0*agg_median(r.accuracy),agg_median(r.viscosity)
+            from result as r left join source as s on (r.source = s.rowid)
+            %s %s
+            order by w desc limit %d"""
 
-        group = ''
-        if g == 1: # by Settings.get('def_group_by')
+        groupby = Settings.get("perf_group_by")
+        group = ""
+        print(groupby)
+        if groupby == 1: # by def_group_by
             DB.reset_counter()
-            gn = Settings.get('def_group_by')
-            if gn <= 1:
-                gn = 1
-            group = "group by cast(counter()/%d as int)" % gn
-        elif g == 2: # by sitting
-            mis = Settings.get('minutes_in_sitting') * 60.0
+            group = "group by cast(counter()/%d as int)" % max(Settings.get("def_group_by"), 1)
+        elif groupby == 2: # by sitting
+            mis = Settings.get("minutes_in_sitting") * 60.0
             DB.reset_time_group()
             group = "group by time_group(%f, r.w)" % mis
-        elif g == 3: # by day
+        elif groupby == 3: # by day
             group = "group by cast((r.w+4*3600)/86400 as int)"
+        elif not groupby: # no grouping
+            sql_template = """select text_id,w,s.name,wpm,100.0*accuracy,viscosity
+                from result as r left join source as s on (r.source = s.rowid)
+                %s %s
+                order by w desc limit %d"""
 
-        n = Settings.get("perf_items")
+        items = Settings.get("perf_items")
 
-        sql = sql % (where, group, n)
+        sql = sql_template % (where_query, group, items)
+        self.model.set_stats([list(r) for r in DB.fetchall(sql)])
+        self.update_graph()
 
-        self.model.setData(list(map(list, DB.fetchall(sql))))
-        self.updateGraph()
+    def double_clicked(self, treeview, where, _column):
+        row = Gtk.TreeModelRow(treeview.get_model(), where)
+        target = DB.fetchone("select id,source,text from text where id = ?", None, (row[0], ))
+        if target is None:
+            return
+        self.emit("set-text", *target)
+        self.emit("go-to-text")
 
-    def doubleClicked(self, idx):
-        r = self.model.rows[idx.row()]
-
-        v = DB.fetchone('select id,source,text from text where id = ?', None, (r[0], ))
-        if v == None:
-            return # silently ignore
-
-        self.emit(SIGNAL("setText"), v)
-        self.emit(SIGNAL("gotoText"))
+if __name__ == "__main__":
+    GtkUtil.show_in_window(PerformanceHistory())
