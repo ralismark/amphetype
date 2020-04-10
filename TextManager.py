@@ -97,8 +97,7 @@ class TextManager(GtkUtil.AmphBoxLayout):
                  GtkUtil.new_button("Delete Disabled", self.delete_disabled),
                  GtkUtil.new_button("Update List", self.update)],
                 [GtkUtil.new_button("Toggle", self.toggle_selected),
-                 " all texts that match regular expression",
-                 SettingsEdit("text_regex")],
+                 " all selected text"],
             ], [
                 ["Selection method for new lessons",
                  SettingsCombo('select_method', ['Random', 'In Order', 'Difficult', 'Easy'])],
@@ -242,6 +241,7 @@ class TextManager(GtkUtil.AmphBoxLayout):
     def enable_all(self):
         DB.execute('update text set disabled = null where disabled is not null')
         self.update()
+        DB.commit()
 
     def delete_disabled(self):
         DB.execute('delete from text where disabled is not null')
@@ -266,9 +266,15 @@ class TextManager(GtkUtil.AmphBoxLayout):
         DB.commit()
 
     def toggle_selected(self):
-        # TODO implement
-        # use Gtk.TreeModelRow
-        pass
+        model, paths = self.tree.get_selection().get_selected_rows()
+        for path in paths:
+            if model.iter_depth(model.get_iter(path)) == 0:
+                continue
+
+            row = Gtk.TreeModelRow(model, path)
+            DB.execute("update text set disabled = 1 where rowid=?", (row[0], ))
+        self.update()
+        DB.commit()
 
     def double_clicked(self, treeview, where, _column):
         model = treeview.get_model()
